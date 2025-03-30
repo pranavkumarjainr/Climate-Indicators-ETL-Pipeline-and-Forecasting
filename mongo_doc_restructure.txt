@@ -1,0 +1,122 @@
+// SOme documents didnt have a key value pairing for year which was unnecessary
+// and made it difficult to work with. This adds that to a few documents so it
+// is easier to work with and saves them into new documents.
+
+// Turning co2 in structured 
+db.co2.aggregate([
+  {
+    // create an array of {k: year, v: { months }}
+    $project: {
+      _id: 0,
+      year_array: { $objectToArray: "$$ROOT" }
+    }
+  },
+  {
+    
+    $project: {
+      year_array: {
+        $filter: {
+          input: "$year_array",
+          as: "item",
+          cond: { $ne: ["$$item.k", "_id"] }
+        }
+      }
+    }
+  },
+  { $unwind: "$year_array" }, 
+  {
+    
+    $project: {
+      year: { $toInt: "$year_array.k" },  
+      month_array: { $objectToArray: "$year_array.v" } 
+    }
+  },
+  { $unwind: "$month_array" },
+  {
+    $project: {
+      year: 1,
+      month: { $toInt: "$month_array.k" },
+      decimal_date: "$month_array.v.decimal_date",
+      monthly_average: "$month_array.v.monthly_average",
+      de_seasonalized: "$month_array.v.de-seasonalized",
+      days: "$month_array.v.#days",
+      st_dev_of_days: "$month_array.v.st.dev_of_days",
+      unc_of_mon_mean: "$month_array.v.unc.of_mon_mean"
+    }
+  },
+  { $merge: "restructured_co2" } // saving new collection
+]);
+
+// Turn global_temp into better format
+db.global_temp.aggregate([
+  {
+    // create an array of {k: year, v: { No_Smoothing, Lowess(5) }}
+    $project: {
+      _id: 0,
+      year_array: { $objectToArray: "$$ROOT" }
+    }
+  },
+  {
+    
+    $project: {
+      year_array: {
+        $filter: {
+          input: "$year_array",
+          as: "item",
+          cond: { $ne: ["$$item.k", "_id"] }
+        }
+      }
+    }
+  },
+  { $unwind: "$year_array" }, 
+  {
+    $project: {
+      year: { $toInt: "$year_array.k" },
+      no_smoothing: "$year_array.v.No_Smoothing",
+      lowess_5: { $getField: { field: "Lowess(5)", input: "$year_array.v" } }
+    }
+  },
+  { $merge: "restructured_global_temp" } // saving new collection
+]);
+
+
+
+
+// Ice sheet into a better format
+db.icesheet.aggregate([
+  {
+        $project: {
+      _id: 0,
+      date_array: { $objectToArray: "$$ROOT" }
+    }
+  },
+  {
+   
+    $project: {
+      date_array: {
+        $filter: {
+          input: "$date_array",
+          as: "item",
+          cond: { $ne: ["$$item.k", "_id"] }
+        }
+      }
+    }
+  },
+  { $unwind: "$date_array" }, 
+  {
+        $project: {
+      decimal_date: { $toDouble: "$date_array.k" },  
+      regions: { $objectToArray: "$date_array.v" }
+    }
+  },
+  { $unwind: "$regions" },
+  {
+       $project: {
+      decimal_date: 1,
+      region: "$regions.k",
+      mass: "$regions.v.mass(Gigatonnes)",
+      uncertainty: "$regions.v.sigma_uncertainty(Gigatonnes)"
+    }
+  },
+  { $merge: "restructured_icesheet" } // creating new collection
+]);

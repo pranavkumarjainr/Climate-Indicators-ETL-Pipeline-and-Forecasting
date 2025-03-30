@@ -1,0 +1,163 @@
+// Query 1: 
+//Combining CO₂ and Global Temperature to get the yearly average of monthly average and de-seasonalized CO₂ levels, 
+//merging that with temperature data from Global Temp, which includes Lowess and No-Smoothing values.
+//Goal: We can observe long-term climate patterns and assess how rising CO₂ levels correlate with global warming. 
+
+db.restructured_co2.aggregate([
+    {
+        "$group": {
+            "_id": "$year",
+            "avg_monthly_average": { "$avg": { "$toDouble": "$monthly_average" } },
+            "avg_de_seasonalized": { "$avg": { "$toDouble": "$de_seasonalized" } }
+        }
+    },
+    {
+        "$match": { "_id": { "$gte": 1958 } }
+    },
+    {
+        "$lookup": {
+            "from": "restructured_global_temp",
+            "localField": "_id",
+            "foreignField": "year",
+            "as": "temperature_data"
+        }
+    },
+    {
+        "$unwind": "$temperature_data"
+    },
+    {
+        "$project": {
+            "_id": 1,
+            "avg_monthly_average": 1,
+            "avg_de_seasonalized": 1,
+            "lowess_5": "$temperature_data.lowess_5",
+            "no_smoothing": "$temperature_data.no_smoothing"
+        }
+    },
+    {
+        "$sort": { "_id": 1 }
+    }
+])
+
+
+//Query 2
+//Combining Ice Sheet Mass Loss and Sea Level to get total and average yearly mass loss and uncertainty from 
+//Antarctica and Greenland, merging that with sea level data to track changes in GMSL (both with and without GIA), 
+//as well as their smoothed versions for trend analysis.
+//Goal: To quantify the impact of ice sheet melting on sea level rise. We can assess how melting ice sheets 
+//contribute to rising sea levels and study the long-term implications for coastal regions.
+
+db.restructured_icesheet.aggregate([
+    {
+        "$group": {
+            "_id": { "$toInt": "$decimal_date" },
+            "total_mass_loss": { "$sum": "$mass" },
+            "avg_mass_loss": { "$avg": "$mass" },
+            "total_uncertainty": { "$sum": "$uncertainty" },
+            "avg_uncertainty": { "$avg": "$uncertainty" }
+        }
+    },
+    {
+        "$match": { "_id": { "$gte": 2002 } }
+    },
+    {
+        "$lookup": {
+            "from": "sealevel",
+            "localField": "_id",
+            "foreignField": "Year",
+            "as": "sea_level_data"
+        }
+    },
+    {
+        "$unwind": "$sea_level_data"
+    },
+    {
+        "$group": {
+            "_id": "$_id",
+            "total_mass_loss": { "$first": "$total_mass_loss" },
+            "avg_mass_loss": { "$first": "$avg_mass_loss" },
+            "total_uncertainty": { "$first": "$total_uncertainty" },
+            "avg_uncertainty": { "$first": "$avg_uncertainty" },
+            "total_GMSL_noGIA": { "$sum": "$sea_level_data.GMSL_noGIA" },
+            "avg_GMSL_noGIA": { "$avg": "$sea_level_data.GMSL_noGIA" },
+            "total_GMSL_GIA": { "$sum": "$sea_level_data.GMSL_GIA" },
+            "avg_GMSL_GIA": { "$avg": "$sea_level_data.GMSL_GIA" },
+            "total_SmoothedGSML_noGIA": { "$sum": "$sea_level_data.SmoothedGSML_noGIA" },
+            "avg_SmoothedGSML_noGIA": { "$avg": "$sea_level_data.SmoothedGSML_noGIA" },
+            "total_SmoothedGSML_GIA": { "$sum": "$sea_level_data.SmoothedGSML_GIA" },
+            "avg_SmoothedGSML_GIA": { "$avg": "$sea_level_data.SmoothedGSML_GIA" }
+        }
+    },
+    {
+        "$sort": { "_id": 1 }
+    }
+])
+
+//Query 3
+// How many of the 6 groups (excluding world) are under values for their lpi per year.
+// Here we can get an idea of the trend of LPI as 100 is the base level they all started at. 
+// currently all under 100 and majority under 50.
+// looking ta the average year to year change
+// getting the average of all lpi for that year.
+db.living_planet_index.aggregate([
+  { $match: { entity: { $nin: ["World"] } } }, // Exclude "World"
+  { $unwind: "$livingPlanetIndexYear" }, // Flatten yearly data
+  {
+    $setWindowFields: {
+      partitionBy: "$entity", // Analyze changes per entity
+      sortBy: { "livingPlanetIndexYear.year": 1 }, // Sort by year
+      output: {
+        prev_lpi: {
+          $shift: {
+            output: "$livingPlanetIndexYear.lpi",
+            by: -1 // Get previous year's LPI
+          }
+        }
+      }
+    }
+  },
+  {
+    $project: {
+      year: "$livingPlanetIndexYear.year",
+      entity: 1,
+      lpi: "$livingPlanetIndexYear.lpi",
+      prev_lpi: 1,
+      year_over_year_change: {
+        $cond: [
+          { $ne: ["$prev_lpi", null] },
+          { $multiply: [{ $divide: [{ $subtract: ["$livingPlanetIndexYear.lpi", "$prev_lpi"] }, "$prev_lpi"] }, 100] },
+          null
+        ]
+      },
+      is_over_100: { $gte: ["$livingPlanetIndexYear.lpi", 100] },
+      is_under_100: { $lt: ["$livingPlanetIndexYear.lpi", 100] },
+      is_over_50: { $gte: ["$livingPlanetIndexYear.lpi", 50] },
+      is_under_50: { $lt: ["$livingPlanetIndexYear.lpi", 50] }
+    }
+  },
+  {
+    $group: {
+      _id: "$year",
+      avg_lpi: { $avg: "$lpi" },
+      avg_year_over_year_change: { $avg: "$year_over_year_change" },
+      over_100_count: { $sum: { $cond: ["$is_over_100", 1, 0] } },
+      under_100_count: { $sum: { $cond: ["$is_under_100", 1, 0] }},
+            over_50_count: { $sum: { $cond: ["$is_over_50", 1, 0] } },
+      under_50_count: { $sum: { $cond: ["$is_under_50", 1, 0] } },
+        entities_count: { $sum: 1 }
+    }
+  },
+  {
+    $project: {
+      year: "$_id",
+      _id: 0,
+      avg_lpi: { $round: ["$avg_lpi", 2] },
+      avg_year_over_year_change: { $round: ["$avg_year_over_year_change", 2] },
+      over_100_count: 1,
+      under_100_count: 1,
+      over_50_count: 1,
+      under_50_count: 1
+    }
+  },
+  { $sort: { year: 1 } }
+]);
